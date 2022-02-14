@@ -24,7 +24,7 @@
 
 // Pin definitions
 #define MSGEQ7_AUDIO_PIN A0
-#define MSGEQ7_STROBE_PIN D0
+#define MSGEQ7_STROBE_PIN D4        //changing this pin to D4 for Fastled DMA library support
 #define MSGEQ7_RESET_PIN  D3
 
 #define AUDIODELAY 0
