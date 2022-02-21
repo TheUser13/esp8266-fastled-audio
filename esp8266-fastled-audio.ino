@@ -15,9 +15,9 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
-
+#define FASTLED_ESP8266_DMA
 //#define FASTLED_ALLOW_INTERRUPTS 0
-#define FASTLED_INTERRUPT_RETRY_COUNT 0
+//#define FASTLED_INTERRUPT_RETRY_COUNT 0
 #include <FastLED.h>
 FASTLED_USING_NAMESPACE
 
@@ -25,35 +25,34 @@ extern "C" {
 #include "user_interface.h"
 }
 
+#define DEBUG 1
 #include <ESP8266WiFi.h>
-//#include <ESP8266mDNS.h>
+#include <WiFiManager.h>
+#include <ESP8266mDNS.h>
 #include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
 #include <ESP8266HTTPUpdateServer.h>
 #include <WebSocketsServer.h>
 #include <FS.h>
 #include <EEPROM.h>
-//#include <IRremoteESP8266.h>
+/*#ifdef IRENABLED
+  #include <IRremoteESP8266.h>
+#endif*/
+
+const char* Thehostname = "LedBar-007";
 #include "GradientPalettes.h"
 
 #define ARRAY_SIZE(A) (sizeof(A) / sizeof((A)[0]))
-
 #include "Field.h"
 
-#define HOSTNAME "ESP8266-" ///< Hostname. The setup function adds the Chip ID at the end.
-
-//#define RECV_PIN D4
-//IRrecv irReceiver(RECV_PIN);
-
-//#include "Commands.h"
-
-const bool apMode = false;
-
-// AP mode password
-const char WiFiAPPSK[] = "";
-
-// Wi-Fi network to connect to (if not in AP mode)
-const char* ssid = "";
-const char* password = "";
+/*
+#ifdef IRENABLED
+  #define RECV_PIN D4
+  IRrecv irReceiver(RECV_PIN);
+  #include "Commands.h"
+#endif
+*/
+uint8_t auxVar=0;       //i am reusing this variable as loop iterator.
 
 ESP8266WebServer webServer(80);
 WebSocketsServer webSocketsServer = WebSocketsServer(81);
@@ -61,10 +60,10 @@ ESP8266HTTPUpdateServer httpUpdateServer;
 
 #include "FSBrowser.h"
 
-#define DATA_PIN      D5
+#define DATA_PIN      3
 #define LED_TYPE      WS2812B
 #define COLOR_ORDER   GRB
-#define NUM_LEDS      144
+#define NUM_LEDS      73
 
 #define CENTER_LED    NUM_LEDS / 2
 
@@ -225,14 +224,25 @@ const uint8_t patternCount = ARRAY_SIZE(patterns);
 #include "Fields.h"
 
 void setup() {
-  WiFi.setSleepMode(WIFI_NONE_SLEEP);
-  
-  Serial.begin(115200);
-  delay(100);
+  ESP.wdtFeed();
+  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP 
+  Serial.begin(74880);
+    //WiFiManager, Local intialization. Once its business is done, there is no need to keep it around
+    WiFiManager wm;
+
+    // reset settings - wipe stored credentials for testing
+    // these are stored by the esp library
+    //wm.resetSettings();
+
+    // Automatically connect using saved credentials,
+    // if connection fails, it starts an access point with the specified name ( "AutoConnectAP"),
+    // if empty will auto generate SSID, if password is blank it will be anonymous AP (wm.autoConnect())
+    // then goes into a blocking loop awaiting configuration and will return success result
+
+    bool res;  
+ // delay(5000);
   Serial.setDebugOutput(true);
-
   initializeAudio();
-
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);         // for WS2812 (Neopixel)
   //FastLED.addLeds<LED_TYPE,DATA_PIN,CLK_PIN,COLOR_ORDER>(leds, NUM_LEDS); // for APA102 (Dotstar)
   FastLED.setDither(false);
@@ -241,40 +251,45 @@ void setup() {
   //  FastLED.setMaxPowerInVoltsAndMilliamps(5, MILLI_AMPS);
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
-
   EEPROM.begin(512);
   loadSettings();
 
   FastLED.setBrightness(brightness);
 
   //  irReceiver.enableIRIn(); // Start the receiver
-
-  Serial.println();
-  Serial.print( F("Heap: ") ); Serial.println(system_get_free_heap_size());
-  Serial.print( F("Boot Vers: ") ); Serial.println(system_get_boot_version());
-  Serial.print( F("CPU: ") ); Serial.println(system_get_cpu_freq());
-  Serial.print( F("SDK: ") ); Serial.println(system_get_sdk_version());
-  Serial.print( F("Chip ID: ") ); Serial.println(system_get_chip_id());
-  Serial.print( F("Flash ID: ") ); Serial.println(spi_flash_get_id());
-  Serial.print( F("Flash Size: ") ); Serial.println(ESP.getFlashChipRealSize());
-  Serial.print( F("Vcc: ") ); Serial.println(ESP.getVcc());
-  Serial.println();
-
+  #ifdef DEBUG
+    Serial.println();
+    Serial.print( F("Heap: ") ); Serial.println(system_get_free_heap_size());
+    Serial.print( F("Boot Vers: ") ); Serial.println(system_get_boot_version());
+    Serial.print( F("CPU: ") ); Serial.println(system_get_cpu_freq());
+    Serial.print( F("SDK: ") ); Serial.println(system_get_sdk_version());
+    Serial.print( F("Chip ID: ") ); Serial.println(system_get_chip_id());
+    Serial.print( F("Flash ID: ") ); Serial.println(spi_flash_get_id());
+    Serial.print( F("Flash Size: ") ); Serial.println(ESP.getFlashChipRealSize());
+    Serial.print( F("Vcc: ") ); Serial.println(ESP.getVcc());
+    Serial.println();
+  #endif
+  
   SPIFFS.begin();
   {
     Dir dir = SPIFFS.openDir("/");
     while (dir.next()) {
       String fileName = dir.fileName();
       size_t fileSize = dir.fileSize();
-      Serial.printf("FS File: %s, size: %s\n", fileName.c_str(), String(fileSize).c_str());
+      #ifdef DEBUG
+        Serial.printf("FS File: %s, size: %s\n", fileName.c_str(), String(fileSize).c_str());
+      #endif
     }
-    Serial.printf("\n");
+    #ifdef DEBUG
+      Serial.printf("\n");
+    #endif
   }
-
+  WiFi.hostname(Thehostname);
+/*
   // Set Hostname.
-  String hostname(HOSTNAME);
+  
   hostname += String(ESP.getChipId(), HEX);
-  WiFi.hostname(hostname);
+  
 
   char hostnameChar[hostname.length() + 1];
   memset(hostnameChar, 0, hostname.length() + 1);
@@ -288,40 +303,24 @@ void setup() {
   //  MDNS.addService("http", "tcp", 80);
 
   // Print hostname.
-  Serial.println("Hostname: " + hostname);
+  #ifdef DEBUG
+    Serial.println("Hostname: " + hostname);
+  #endif*/
+  ESP.wdtFeed();
 
-  if (apMode)
-  {
-    WiFi.mode(WIFI_AP);
 
-    // Do a little work to get a unique-ish name. Append the
-    // last two bytes of the MAC (HEX'd) to "Thing-":
-    uint8_t mac[WL_MAC_ADDR_LENGTH];
-    WiFi.softAPmacAddress(mac);
-    String macID = String(mac[WL_MAC_ADDR_LENGTH - 2], HEX) +
-                   String(mac[WL_MAC_ADDR_LENGTH - 1], HEX);
-    macID.toUpperCase();
-    String AP_NameString = "ESP8266-" + macID;
+    res = wm.autoConnect("LedBar-ConfigAP","admin"); // password protected ap
 
-    char AP_NameChar[AP_NameString.length() + 1];
-    memset(AP_NameChar, 0, AP_NameString.length() + 1);
+    if(!res) {
+        Serial.println("Failed to connect");
+        // ESP.restart();
+    } 
+    else {
+        //if you get here you have connected to the WiFi    
+        Serial.println("connected...yeey :)");
+        wm.stopWebPortal();
 
-    for (int i = 0; i < AP_NameString.length(); i++)
-      AP_NameChar[i] = AP_NameString.charAt(i);
 
-    WiFi.softAP(AP_NameChar, WiFiAPPSK);
-
-    Serial.printf("Connect to Wi-Fi access point: %s\n", AP_NameChar);
-    Serial.println("and open http://192.168.4.1 in your browser");
-  }
-  else
-  {
-    WiFi.mode(WIFI_STA);
-    Serial.printf("Connecting to %s\n", ssid);
-    if (String(WiFi.SSID()) != String(ssid)) {
-      WiFi.begin(ssid, password);
-    }
-  }
 
   httpUpdateServer.setup(&webServer);
 
@@ -454,16 +453,29 @@ void setup() {
     webServer.send(200, "text/plain", "");
   }, handleFileUpload);
 
-  webServer.serveStatic("/", SPIFFS, "/", "max-age=86400");
+		//I need this for the Captive Portal	
+           webServer.onNotFound([]() { // If the client requests any URI
+              String path="/index.htm";
+              if (SPIFFS.exists(path)) { // If the file exists
+                File file = SPIFFS.open(path, "r"); // Open it
+                size_t sent = webServer.streamFile(file, "text/html"); // And send it to the client
+                file.close(); // Then close the file again
+              } 	
+           });
 
+  webServer.serveStatic("/", SPIFFS, "/", "max-age=86400");
   webServer.begin();
-  Serial.println("HTTP web server started");
+  #ifdef DEBUG
+    Serial.println("HTTP web server started");
+  #endif
 
   webSocketsServer.begin();
   webSocketsServer.onEvent(webSocketEvent);
-  Serial.println("Web socket server started");
-
+  #ifdef DEBUG
+    Serial.println("Web socket server started");
+  #endif
   autoPlayTimeout = millis() + (autoplayDuration * 1000);
+  }
 }
 
 void sendInt(uint8_t value)
@@ -489,7 +501,7 @@ void broadcastString(String name, String value)
 }
 
 void loop() {
-  currentMillis = millis(); // save the current timer value
+	currentMillis = millis(); // save the current timer value
 
   // analyze the audio input
   if (currentMillis - audioMillis > AUDIODELAY) {
@@ -499,10 +511,9 @@ void loop() {
 
   // Add entropy to random number generator; we use a lot of it.
   random16_add_entropy(analogRead(MSGEQ7_AUDIO_PIN));
-
   webSocketsServer.loop();
-  webServer.handleClient();
-
+  webServer.handleClient();  
+  
   //  handleIrInput();
 
   if (power == 0) {
@@ -546,22 +557,26 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 
   switch (type) {
     case WStype_DISCONNECTED:
-      Serial.printf("[%u] Disconnected!\n", num);
+      #ifdef DEBUG
+        Serial.printf("[%u] Disconnected!\n", num);
+      #endif
       break;
 
     case WStype_CONNECTED:
       {
         IPAddress ip = webSocketsServer.remoteIP(num);
-        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
-
+        #ifdef DEBUG
+          Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
+        #endif
         // send message to client
         // webSocketsServer.sendTXT(num, "Connected");
       }
       break;
 
     case WStype_TEXT:
-      Serial.printf("[%u] get Text: %s\n", num, payload);
-
+      #ifdef DEBUG
+        Serial.printf("[%u] get Text: %s\n", num, payload);
+      #endif
       // send message to client
       // webSocketsServer.sendTXT(num, "message here");
 
@@ -570,7 +585,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       break;
 
     case WStype_BIN:
-      Serial.printf("[%u] get binary length: %u\n", num, length);
+      #ifdef DEBUG
+         Serial.printf("[%u] get binary length: %u\n", num, length);
+      #endif
       hexdump(payload, length);
 
       // send message to client
@@ -578,216 +595,238 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       break;
   }
 }
+/*
+#ifdef IRENABLED
 
-//void handleIrInput()
-//{
-//  InputCommand command = readCommand();
-//
-//  if (command != InputCommand::None) {
-//    Serial.print("command: ");
-//    Serial.println((int) command);
-//  }
-//
-//  switch (command) {
-//    case InputCommand::Up: {
-//        adjustPattern(true);
-//        break;
-//      }
-//    case InputCommand::Down: {
-//        adjustPattern(false);
-//        break;
-//      }
-//    case InputCommand::Power: {
-//        setPower(power == 0 ? 1 : 0);
-//        break;
-//      }
-//    case InputCommand::BrightnessUp: {
-//        adjustBrightness(true);
-//        break;
-//      }
-//    case InputCommand::BrightnessDown: {
-//        adjustBrightness(false);
-//        break;
-//      }
-//    case InputCommand::PlayMode: { // toggle pause/play
-//        setAutoplay(!autoplay);
-//        break;
-//      }
-//
-//    // pattern buttons
-//
-//    case InputCommand::Pattern1: {
-//        setPattern(0);
-//        break;
-//      }
-//    case InputCommand::Pattern2: {
-//        setPattern(1);
-//        break;
-//      }
-//    case InputCommand::Pattern3: {
-//        setPattern(2);
-//        break;
-//      }
-//    case InputCommand::Pattern4: {
-//        setPattern(3);
-//        break;
-//      }
-//    case InputCommand::Pattern5: {
-//        setPattern(4);
-//        break;
-//      }
-//    case InputCommand::Pattern6: {
-//        setPattern(5);
-//        break;
-//      }
-//    case InputCommand::Pattern7: {
-//        setPattern(6);
-//        break;
-//      }
-//    case InputCommand::Pattern8: {
-//        setPattern(7);
-//        break;
-//      }
-//    case InputCommand::Pattern9: {
-//        setPattern(8);
-//        break;
-//      }
-//    case InputCommand::Pattern10: {
-//        setPattern(9);
-//        break;
-//      }
-//    case InputCommand::Pattern11: {
-//        setPattern(10);
-//        break;
-//      }
-//    case InputCommand::Pattern12: {
-//        setPattern(11);
-//        break;
-//      }
-//
-//    // custom color adjustment buttons
-//
-//    case InputCommand::RedUp: {
-//        solidColor.red += 8;
-//        setSolidColor(solidColor);
-//        break;
-//      }
-//    case InputCommand::RedDown: {
-//        solidColor.red -= 8;
-//        setSolidColor(solidColor);
-//        break;
-//      }
-//    case InputCommand::GreenUp: {
-//        solidColor.green += 8;
-//        setSolidColor(solidColor);
-//        break;
-//      }
-//    case InputCommand::GreenDown: {
-//        solidColor.green -= 8;
-//        setSolidColor(solidColor);
-//        break;
-//      }
-//    case InputCommand::BlueUp: {
-//        solidColor.blue += 8;
-//        setSolidColor(solidColor);
-//        break;
-//      }
-//    case InputCommand::BlueDown: {
-//        solidColor.blue -= 8;
-//        setSolidColor(solidColor);
-//        break;
-//      }
-//
-//    // color buttons
-//
-//    case InputCommand::Red: {
-//        setSolidColor(CRGB::Red);
-//        break;
-//      }
-//    case InputCommand::RedOrange: {
-//        setSolidColor(CRGB::OrangeRed);
-//        break;
-//      }
-//    case InputCommand::Orange: {
-//        setSolidColor(CRGB::Orange);
-//        break;
-//      }
-//    case InputCommand::YellowOrange: {
-//        setSolidColor(CRGB::Goldenrod);
-//        break;
-//      }
-//    case InputCommand::Yellow: {
-//        setSolidColor(CRGB::Yellow);
-//        break;
-//      }
-//
-//    case InputCommand::Green: {
-//        setSolidColor(CRGB::Green);
-//        break;
-//      }
-//    case InputCommand::Lime: {
-//        setSolidColor(CRGB::Lime);
-//        break;
-//      }
-//    case InputCommand::Aqua: {
-//        setSolidColor(CRGB::Aqua);
-//        break;
-//      }
-//    case InputCommand::Teal: {
-//        setSolidColor(CRGB::Teal);
-//        break;
-//      }
-//    case InputCommand::Navy: {
-//        setSolidColor(CRGB::Navy);
-//        break;
-//      }
-//
-//    case InputCommand::Blue: {
-//        setSolidColor(CRGB::Blue);
-//        break;
-//      }
-//    case InputCommand::RoyalBlue: {
-//        setSolidColor(CRGB::RoyalBlue);
-//        break;
-//      }
-//    case InputCommand::Purple: {
-//        setSolidColor(CRGB::Purple);
-//        break;
-//      }
-//    case InputCommand::Indigo: {
-//        setSolidColor(CRGB::Indigo);
-//        break;
-//      }
-//    case InputCommand::Magenta: {
-//        setSolidColor(CRGB::Magenta);
-//        break;
-//      }
-//
-//    case InputCommand::White: {
-//        setSolidColor(CRGB::White);
-//        break;
-//      }
-//    case InputCommand::Pink: {
-//        setSolidColor(CRGB::Pink);
-//        break;
-//      }
-//    case InputCommand::LightPink: {
-//        setSolidColor(CRGB::LightPink);
-//        break;
-//      }
-//    case InputCommand::BabyBlue: {
-//        setSolidColor(CRGB::CornflowerBlue);
-//        break;
-//      }
-//    case InputCommand::LightBlue: {
-//        setSolidColor(CRGB::LightBlue);
-//        break;
-//      }
-//  }
-//}
+void handleIrInput()
+{
+  InputCommand command = readCommand();
 
+  if (command != InputCommand::None) {
+     #ifdef DEBUG
+      Serial.print("command: ");
+      Serial.println((int) command);
+     #endif
+  }
+
+  switch (command) {
+    case InputCommand::Up: {
+        adjustPattern(true);
+        break;
+      }
+    case InputCommand::Down: {
+        adjustPattern(false);
+        break;
+      }
+    case InputCommand::Power: {
+        setPower(power == 0 ? 1 : 0);
+        break;
+      }
+    case InputCommand::BrightnessUp: {
+        adjustBrightness(true);
+        break;
+      }
+    case InputCommand::BrightnessDown: {
+        adjustBrightness(false);
+        break;
+      }
+    case InputCommand::PlayMode: {  toggle pause/play
+        setAutoplay(!autoplay);
+        break;
+      }
+
+     pattern buttons
+
+    case InputCommand::Pattern1: {
+        setPattern(0);
+        break;
+      }
+    case InputCommand::Pattern2: {
+        setPattern(1);
+        break;
+      }
+    case InputCommand::Pattern3: {
+        setPattern(2);
+        break;
+      }
+    case InputCommand::Pattern4: {
+        setPattern(3);
+        break;
+      }
+    case InputCommand::Pattern5: {
+        setPattern(4);
+        break;
+      }
+    case InputCommand::Pattern6: {
+        setPattern(5);
+        break;
+      }
+    case InputCommand::Pattern7: {
+        setPattern(6);
+        break;
+      }
+    case InputCommand::Pattern8: {
+        setPattern(7);
+        break;
+      }
+    case InputCommand::Pattern9: {
+        setPattern(8);
+        break;
+      }
+    case InputCommand::Pattern10: {
+        setPattern(9);
+        break;
+      }
+    case InputCommand::Pattern11: {
+        setPattern(10);
+        break;
+      }
+    case InputCommand::Pattern12: {
+        setPattern(11);
+        break;
+      }
+
+     custom color adjustment buttons
+
+    case InputCommand::RedUp: {
+        solidColor.red += 8;
+        setSolidColor(solidColor);
+        break;
+      }
+    case InputCommand::RedDown: {
+        solidColor.red -= 8;
+        setSolidColor(solidColor);
+        break;
+      }
+    case InputCommand::GreenUp: {
+        solidColor.green += 8;
+        setSolidColor(solidColor);
+        break;
+      }
+    case InputCommand::GreenDown: {
+        solidColor.green -= 8;
+        setSolidColor(solidColor);
+        break;
+      }
+    case InputCommand::BlueUp: {
+        solidColor.blue += 8;
+        setSolidColor(solidColor);
+        break;
+      }
+    case InputCommand::BlueDown: {
+        solidColor.blue -= 8;
+        setSolidColor(solidColor);
+        break;
+      }
+
+     color buttons
+
+    case InputCommand::Red: {
+        setSolidColor(CRGB::Red);
+        break;
+      }
+    case InputCommand::RedOrange: {
+        setSolidColor(CRGB::OrangeRed);
+        break;
+      }
+    case InputCommand::Orange: {
+        setSolidColor(CRGB::Orange);
+        break;
+      }
+    case InputCommand::YellowOrange: {
+        setSolidColor(CRGB::Goldenrod);
+        break;
+      }
+    case InputCommand::Yellow: {
+        setSolidColor(CRGB::Yellow);
+        break;
+      }
+
+    case InputCommand::Green: {
+        setSolidColor(CRGB::Green);
+        break;
+      }
+    case InputCommand::Lime: {
+        setSolidColor(CRGB::Lime);
+        break;
+      }
+    case InputCommand::Aqua: {
+        setSolidColor(CRGB::Aqua);
+        break;
+      }
+    case InputCommand::Teal: {
+        setSolidColor(CRGB::Teal);
+        break;
+      }
+    case InputCommand::Navy: {
+        setSolidColor(CRGB::Navy);
+        break;
+      }
+
+    case InputCommand::Blue: {
+        setSolidColor(CRGB::Blue);
+        break;
+      }
+    case InputCommand::RoyalBlue: {
+        setSolidColor(CRGB::RoyalBlue);
+        break;
+      }
+    case InputCommand::Purple: {
+        setSolidColor(CRGB::Purple);
+        break;
+      }
+    case InputCommand::Indigo: {
+        setSolidColor(CRGB::Indigo);
+        break;
+      }
+    case InputCommand::Magenta: {
+        setSolidColor(CRGB::Magenta);
+        break;
+      }
+
+    case InputCommand::White: {
+        setSolidColor(CRGB::White);
+        break;
+      }
+    case InputCommand::Pink: {
+        setSolidColor(CRGB::Pink);
+        break;
+      }
+    case InputCommand::LightPink: {
+        setSolidColor(CRGB::LightPink);
+        break;
+      }
+    case InputCommand::BabyBlue: {
+        setSolidColor(CRGB::CornflowerBlue);
+        break;
+      }
+    case InputCommand::LightBlue: {
+        setSolidColor(CRGB::LightBlue);
+        break;
+      }
+  }
+}
+#endif
+*/
 void loadSettings()
 {
+  /*
+  uint8_t ssidLen=0;
+  uint8_t passLen=0;
+  ssidLen=EEPROM.read(9);
+  passLen=EEPROM.read(10);
+  if(ssidLen>32){ssidLen=32;}       //max SSID len is 32
+  if(ssidLen==0)apMode=1;
+  if(passLen>32){passLen=32;}       //max password len is 32
+	//read wifi name and password from eeprom to ram
+  for (auxVar = 11; auxVar < (11+ssidLen); ++auxVar)
+  {
+    esid += char(EEPROM.read(auxVar));
+  }
+  for (auxVar = 44; auxVar < (44+passLen); ++auxVar)
+  {
+    epass += char(EEPROM.read(auxVar));
+  }	*/
   brightness = EEPROM.read(0);
 
   currentPatternIndex = EEPROM.read(1);
@@ -800,10 +839,7 @@ void loadSettings()
   byte g = EEPROM.read(3);
   byte b = EEPROM.read(4);
 
-  if (r == 0 && g == 0 && b == 0)
-  {
-  }
-  else
+  if (r != 0 && g != 0 && b != 0)
   {
     solidColor = CRGB(r, g, b);
   }
